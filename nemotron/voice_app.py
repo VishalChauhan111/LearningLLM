@@ -73,10 +73,9 @@ def speak_to_file(text):
 
 
 def respond(text, audio_path, history):
-    history = list(history or [])
     text = (text or "").strip()
 
-    # Use typed text if supplied; otherwise transcribe audio.
+    # Convert recorded audio to text if no typed message exists.
     if not text and audio_path:
         try:
             text = transcribe_audio(audio_path)
@@ -88,12 +87,29 @@ def respond(text, audio_path, history):
     if not text:
         raise gr.Error("Type a message or record your voice.")
 
-    history.append({"role": "user", "content": text})
-
+    # Build Ollama messages using plain strings.
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT}
     ]
-    messages.extend(history[-12:])
+
+    # Safely convert existing Gradio history.
+    for item in (history or []):
+        if not isinstance(item, dict):
+            continue
+
+        role = item.get("role")
+        content = item.get("content")
+
+        if role not in ("user", "assistant"):
+            continue
+
+        if isinstance(content, str) and content.strip():
+            messages.append({
+                "role": role,
+                "content": content
+            })
+
+    messages.append({"role": "user", "content": text})
 
     try:
         result = ollama.chat(
@@ -101,6 +117,7 @@ def respond(text, audio_path, history):
             messages=messages,
             options={"num_ctx": 2048},
         )
+
         answer = (result.message.content or "").strip()
 
         if not answer:
@@ -111,7 +128,9 @@ def respond(text, audio_path, history):
             f"Nemotron request failed: {error}"
         ) from error
 
-    history.append({"role": "assistant", "content": answer})
+    updated_history = list(history or [])
+    updated_history.append({"role": "user", "content": text})
+    updated_history.append({"role": "assistant", "content": answer})
 
     try:
         audio_reply = speak_to_file(answer)
@@ -120,7 +139,7 @@ def respond(text, audio_path, history):
             f"Text answer created, but speech failed: {error}"
         ) from error
 
-    return history, "", None, audio_reply
+    return updated_history, "", None, audio_reply
 
 
 with gr.Blocks(title="Local Nemotron Voice Assistant") as demo:
@@ -131,7 +150,6 @@ with gr.Blocks(title="Local Nemotron Voice Assistant") as demo:
     )
 
     chatbot = gr.Chatbot(
-        type="messages",
         label="Conversation",
         height=420,
     )
